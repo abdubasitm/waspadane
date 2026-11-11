@@ -837,14 +837,26 @@
     </div>
     <div class="card">
       <h2>Pola yang Perlu Perhatian</h2>
-      <p class="sub">Penyakit dengan ≥3 kasus di desa &amp; minggu epidemiologi yang sama.</p>
+      <p class="sub">Berdasarkan standar alert IBS-SKDR Kemenkes Ditjen P2P. <span style="color:#C4432B;font-weight:600;">Fix Case</span>: langsung alert jika ≥ jumlah minimum. <span style="color:#D98E04;font-weight:600;">Peningkatan Kasus</span>: jumlah kasus melebihi factor × rata-rata periode sebelumnya.</p>
       <div id="alertList"></div>
     </div>
+
+    <!-- FILTER PENYAKIT -->
+    <div class="card" style="padding:14px 18px;">
+      <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+        <span style="font-weight:600;font-size:13.5px;white-space:nowrap;">🔍 Filter Analisis:</span>
+        <select id="filterPenyakit" onchange="onFilterPenyakitChange()" style="flex:1;min-width:200px;padding:7px 10px;border-radius:7px;border:1px solid var(--line);font-size:13px;background:var(--surface);color:var(--text);">
+          <option value="">— Semua Penyakit —</option>
+        </select>
+        <span id="filterPenyakitCount" style="font-size:12px;color:var(--muted);white-space:nowrap;"></span>
+      </div>
+    </div>
+
     <div class="grid2">
-      <div class="card"><h2>Analisis Tempat</h2><p class="sub">Jumlah kasus per desa/kelurahan</p><div class="chart-box"><canvas id="chartTempat"></canvas></div></div>
-      <div class="card"><h2>Analisis Waktu</h2><p class="sub">Tren kasus total per minggu</p><div class="chart-box"><canvas id="chartWaktu"></canvas></div></div>
-      <div class="card"><h2>Analisis Orang — Kelompok Umur</h2><div class="chart-box"><canvas id="chartOrangUmur"></canvas></div></div>
-      <div class="card"><h2>Analisis Orang — Jenis Kelamin</h2><div class="chart-box"><canvas id="chartOrangGender"></canvas></div></div>
+      <div class="card"><h2 id="judulTempat">Analisis Tempat</h2><p class="sub">Jumlah kasus per desa/kelurahan</p><div class="chart-box"><canvas id="chartTempat"></canvas></div></div>
+      <div class="card"><h2 id="judulWaktu">Analisis Waktu</h2><p class="sub">Tren kasus per minggu epidemiologi</p><div class="chart-box"><canvas id="chartWaktu"></canvas></div></div>
+      <div class="card"><h2 id="judulUmur">Analisis Orang — Kelompok Umur</h2><div class="chart-box"><canvas id="chartOrangUmur"></canvas></div></div>
+      <div class="card"><h2 id="judulGender">Analisis Orang — Jenis Kelamin</h2><div class="chart-box"><canvas id="chartOrangGender"></canvas></div></div>
     </div>
     <div class="card"><h2>10 Penyakit Terbanyak</h2><div class="chart-box" style="height:320px;"><canvas id="chartPenyakit"></canvas></div></div>
   </section>
@@ -2532,6 +2544,7 @@ function renderTrenPenyakitChart(kasus) {
 
 function renderDashboard() {
   const kasus = state.kasus;
+  // Stat cards selalu dari SEMUA kasus
   document.getElementById("statTotalKasus").textContent = kasus.length;
   document.getElementById("statTotalBencana").textContent = state.bencana.length;
   const desaSet = new Set(kasus.map(k => k.desa));
@@ -2552,21 +2565,79 @@ function renderDashboard() {
     return;
   }
 
+  // Isi dropdown filter penyakit
+  _updateFilterPenyakit(kasus);
+
   renderTrenMingguIni(kasus);
   renderTrenPenyakitChart(kasus);
   renderTabelMinggu(kasus);
+  renderAlertList(kasus);
+
+  // Render grafik analisis sesuai filter
+  _renderAnalisisGrafik();
+}
+
+// Update pilihan dropdown filter penyakit
+function _updateFilterPenyakit(kasus) {
+  const sel = document.getElementById("filterPenyakit");
+  if (!sel) return;
+  const nilaiSkrg = sel.value;
+  const daftarPenyakit = [...new Set(kasus.map(k => k.nama_penyakit).filter(Boolean))].sort();
+  sel.innerHTML = `<option value="">— Semua Penyakit (${kasus.length} kasus) —</option>` +
+    daftarPenyakit.map(p => {
+      const jumlah = kasus.filter(k => k.nama_penyakit === p).length;
+      return `<option value="${p}" ${nilaiSkrg === p ? "selected" : ""}>${p} (${jumlah})</option>`;
+    }).join("");
+}
+
+// Dipanggil saat dropdown berubah
+function onFilterPenyakitChange() {
+  _renderAnalisisGrafik();
+}
+
+// Render grafik Tempat, Waktu, Orang sesuai filter penyakit yang dipilih
+function _renderAnalisisGrafik() {
+  const sel = document.getElementById("filterPenyakit");
+  const filter = sel ? sel.value : "";
+  const semua = state.kasus;
+  const kasus = filter ? semua.filter(k => k.nama_penyakit === filter) : semua;
+  const label = filter ? filter : "Semua Penyakit";
+  const jumlah = kasus.length;
+
+  // Update label judul grafik
+  const sufiks = filter ? ` — <span style="color:var(--primary);font-size:13px;">${filter} (${jumlah} kasus)</span>` : "";
+  ["judulTempat","judulWaktu","judulUmur","judulGender"].forEach((id, i) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const judul = ["Analisis Tempat","Analisis Waktu","Analisis Orang — Kelompok Umur","Analisis Orang — Jenis Kelamin"][i];
+    el.innerHTML = judul + sufiks;
+  });
+
+  // Update counter
+  const counter = document.getElementById("filterPenyakitCount");
+  if (counter) counter.textContent = filter ? `${jumlah} kasus ditampilkan` : "";
+
+  if (jumlah === 0) {
+    ["chartTempat","chartWaktu","chartOrangUmur","chartOrangGender"].forEach(id =>
+      drawChart(id, "bar", [], [], id)
+    );
+    return;
+  }
 
   // ---- ANALISIS TEMPAT (per desa) ----
   const perDesa = {};
   kasus.forEach(k => perDesa[k.desa] = (perDesa[k.desa] || 0) + 1);
   const desaLabels = Object.keys(perDesa).sort((a, b) => perDesa[b] - perDesa[a]);
-  drawChart("chartTempat", "bar", desaLabels, [{ label: "Jumlah kasus", data: desaLabels.map(d => perDesa[d]), backgroundColor: "#1B8A8A" }], "chartTempat");
+  drawChart("chartTempat", "bar", desaLabels,
+    [{ label: `Kasus ${label}`, data: desaLabels.map(d => perDesa[d]), backgroundColor: "#1B8A8A" }], "chartTempat");
 
   // ---- ANALISIS WAKTU (per minggu epidemiologi) ----
   const perMinggu = {};
   kasus.forEach(k => { const wk = isoWeekKey(k.tanggal_lapor); perMinggu[wk] = (perMinggu[wk] || 0) + 1; });
   const mingguLabels = Object.keys(perMinggu).sort();
-  drawChart("chartWaktu", "line", mingguLabels, [{ label: "Jumlah kasus/minggu", data: mingguLabels.map(w => perMinggu[w]), borderColor: "#0E4749", backgroundColor: "rgba(14,71,73,0.12)", fill: true, tension: 0.25 }], "chartWaktu");
+  drawChart("chartWaktu", "line", mingguLabels,
+    [{ label: `Kasus ${label}/minggu`, data: mingguLabels.map(w => perMinggu[w]),
+       borderColor: "#0E4749", backgroundColor: "rgba(14,71,73,0.12)", fill: true, tension: 0.25 }], "chartWaktu");
 
   // ---- ANALISIS ORANG ----
   const grupUmur = { "0-4": 0, "5-14": 0, "15-44": 0, "45-64": 0, "65+": 0, "?": 0 };
@@ -2581,28 +2652,149 @@ function renderDashboard() {
     else grupUmur["65+"]++;
     if (k.jenis_kelamin) grupGender[k.jenis_kelamin] = (grupGender[k.jenis_kelamin] || 0) + 1;
   });
-  drawChart("chartOrangUmur", "bar", Object.keys(grupUmur), [{ label: "Kelompok umur", data: Object.values(grupUmur), backgroundColor: "#D98E04" }], "chartOrangUmur");
-  drawChart("chartOrangGender", "doughnut", Object.keys(grupGender), [{ data: Object.values(grupGender), backgroundColor: ["#1B8A8A", "#C4432B"] }], "chartOrangGender");
+  drawChart("chartOrangUmur", "bar", Object.keys(grupUmur),
+    [{ label: `Umur — ${label}`, data: Object.values(grupUmur), backgroundColor: "#D98E04" }], "chartOrangUmur");
+  drawChart("chartOrangGender", "doughnut", Object.keys(grupGender),
+    [{ data: Object.values(grupGender), backgroundColor: ["#1B8A8A", "#C4432B"] }], "chartOrangGender");
 
-  // ---- TOP PENYAKIT ----
+  // ---- TOP PENYAKIT (selalu dari semua kasus) ----
   const perPenyakit = {};
-  kasus.forEach(k => perPenyakit[k.nama_penyakit] = (perPenyakit[k.nama_penyakit] || 0) + 1);
+  semua.forEach(k => perPenyakit[k.nama_penyakit] = (perPenyakit[k.nama_penyakit] || 0) + 1);
   const penyakitLabels = Object.keys(perPenyakit).sort((a, b) => perPenyakit[b] - perPenyakit[a]).slice(0, 10);
-  drawChart("chartPenyakit", "bar", penyakitLabels, [{ label: "Jumlah kasus", data: penyakitLabels.map(p => perPenyakit[p]), backgroundColor: "#3E8E7E" }], "chartPenyakit", true);
-
-  renderAlertList(kasus);
+  drawChart("chartPenyakit", "bar", penyakitLabels,
+    [{ label: "Jumlah kasus", data: penyakitLabels.map(p => perPenyakit[p]), backgroundColor: "#3E8E7E" }], "chartPenyakit", true);
 }
 
+// === STANDAR ALERT IBS-SKDR KEMENKES DITJEN P2P ===
+// Kategori Fix Case: alert jika jumlah kasus >= Min (dalam 1 minggu epidemiologi, lintas desa)
+const SKDR_FIX_CASE = {
+  "Diare Berdarah":              { kode:"E",  min:1 },
+  "Sindrom Jaundice Akut":       { kode:"G",  min:1 },
+  "Suspek Kolera":               { kode:"S",  min:1 },
+  "Malaria Konfirmasi":          { kode:"B",  min:1 },
+  "Suspek Dengue":               { kode:"C",  min:2 },
+  "Suspek Meningitis / Ensefalitis": { kode:"U", min:3 },
+  "Suspek HFMD":                 { kode:"Z",  min:1 },
+  "Suspek Tetanus":              { kode:"W",  min:1 },
+  "Suspek Campak":               { kode:"K",  min:1 },
+  "Kasus Observasi Difteri":     { kode:"L",  min:1 },
+  "Suspek Pertusis":             { kode:"M",  min:1 },
+  "AFP":                         { kode:"N",  min:1 },
+  "Suspek Tetanus Neonatorum":   { kode:"V",  min:1 },
+  "COVID-19 Konfirmasi":         { kode:"AC", min:1 },
+  "Suspek Flu Burung Pada Manusia": { kode:"J", min:1 },
+  "GHPR":                        { kode:"P",  min:1 },
+  "Suspek Antraks":              { kode:"Q",  min:1 },
+  "Suspek Leptospirosis":        { kode:"R",  min:1 },
+};
+// Kategori Peningkatan Kasus: alert jika kasus minggu ini > factor × rata-rata 4 minggu sebelumnya, dan >= min
+const SKDR_PENINGKATAN = {
+  "Diare Akut":           { kode:"A",  factor:1.5, comptu:1, min:1 },
+  "Suspek Demam Tifoid":  { kode:"F",  factor:1.5, comptu:1, min:1 },
+  "Suspek Chikungunya":   { kode:"H",  factor:1.5, comptu:1, min:1 },
+  "Pneumonia":            { kode:"D",  factor:1.5, comptu:1, min:1 },
+  "ILI":                  { kode:"Y",  factor:1.5, comptu:1, min:1 },
+  "ISPA":                 { kode:"AA", factor:1.5, comptu:1, min:1 },
+};
+
 function renderAlertList(kasus) {
-  const key = k => `${k.desa}||${k.nama_penyakit}||${isoWeekKey(k.tanggal_lapor)}`;
-  const counter = {};
-  kasus.forEach(k => { const kk = key(k); counter[kk] = (counter[kk] || 0) + 1; });
-  const alerts = Object.entries(counter).filter(([k, v]) => v >= 3).sort((a, b) => b[1] - a[1]).slice(0, 8);
   const wrap = document.getElementById("alertList");
-  if (alerts.length === 0) { wrap.innerHTML = `<p class="hint">Belum ada pola kasus yang perlu perhatian khusus minggu ini.</p>`; return; }
-  wrap.innerHTML = alerts.map(([k, v]) => {
-    const [desa, penyakit, minggu] = k.split("||");
-    return `<div class="alert-item"><span class="alert-count">${v}</span><div><strong>${penyakit}</strong> — Desa ${desa} <span class="hint">(${minggu})</span></div></div>`;
+  if (!kasus || kasus.length === 0) {
+    wrap.innerHTML = `<p class="hint">Belum ada laporan kasus.</p>`; return;
+  }
+
+  // Helper: dapatkan minggu epidemiologi dari tanggal
+  const getMinggu = dateStr => isoWeekKey(dateStr);
+
+  // Kelompokkan kasus per penyakit per minggu
+  const perPenyakitMinggu = {};
+  kasus.forEach(k => {
+    const nm = k.nama_penyakit || "";
+    const mg = getMinggu(k.tanggal_lapor);
+    if (!nm || mg === "?") return;
+    if (!perPenyakitMinggu[nm]) perPenyakitMinggu[nm] = {};
+    perPenyakitMinggu[nm][mg] = (perPenyakitMinggu[nm][mg] || 0) + 1;
+  });
+
+  // Tentukan minggu berjalan (terbaru)
+  const semuaMinggu = [...new Set(kasus.map(k => getMinggu(k.tanggal_lapor)).filter(m => m !== "?"))].sort();
+  const mingguSkrg = semuaMinggu[semuaMinggu.length - 1] || "";
+
+  const alertItems = [];
+
+  // --- CEK FIX CASE ---
+  Object.entries(SKDR_FIX_CASE).forEach(([nama, cfg]) => {
+    // Cocokkan nama penyakit (fleksibel: contains)
+    const matchKey = Object.keys(perPenyakitMinggu).find(k =>
+      k.toLowerCase().includes(nama.toLowerCase().split(" ")[1] || nama.toLowerCase().split(" ")[0])
+      || nama.toLowerCase().includes(k.toLowerCase().split(" ")[1] || k.toLowerCase().split(" ")[0])
+      || k.toLowerCase() === nama.toLowerCase()
+    );
+    if (!matchKey) return;
+    const jumlahSkrg = perPenyakitMinggu[matchKey][mingguSkrg] || 0;
+    if (jumlahSkrg >= cfg.min) {
+      alertItems.push({ tipe:"fix", nama: matchKey, kode: cfg.kode, jumlah: jumlahSkrg, min: cfg.min, minggu: mingguSkrg });
+    }
+  });
+
+  // --- CEK PENINGKATAN KASUS ---
+  Object.entries(SKDR_PENINGKATAN).forEach(([nama, cfg]) => {
+    const matchKey = Object.keys(perPenyakitMinggu).find(k =>
+      k.toLowerCase() === nama.toLowerCase() ||
+      k.toLowerCase().includes(nama.toLowerCase()) ||
+      nama.toLowerCase().includes(k.toLowerCase())
+    );
+    if (!matchKey) return;
+    const jumlahSkrg = perPenyakitMinggu[matchKey][mingguSkrg] || 0;
+    if (jumlahSkrg < cfg.min) return;
+    // Rata-rata 4 minggu sebelumnya
+    const mingguSebelum = semuaMinggu.filter(m => m < mingguSkrg).slice(-4);
+    if (mingguSebelum.length === 0) {
+      // Tidak ada data historis — gunakan threshold minimum saja
+      if (jumlahSkrg >= cfg.min) {
+        alertItems.push({ tipe:"peningkatan", nama: matchKey, kode: cfg.kode, jumlah: jumlahSkrg, factor: cfg.factor, rataRata: null, minggu: mingguSkrg });
+      }
+      return;
+    }
+    const totalSebelum = mingguSebelum.reduce((s, m) => s + (perPenyakitMinggu[matchKey][m] || 0), 0);
+    const rataRata = totalSebelum / mingguSebelum.length;
+    const threshold = rataRata * cfg.factor;
+    if (jumlahSkrg > threshold) {
+      alertItems.push({ tipe:"peningkatan", nama: matchKey, kode: cfg.kode, jumlah: jumlahSkrg, factor: cfg.factor, rataRata: rataRata.toFixed(1), threshold: threshold.toFixed(1), minggu: mingguSkrg });
+    }
+  });
+
+  if (alertItems.length === 0) {
+    wrap.innerHTML = `<p class="hint">Tidak ada alert SKDR minggu ini (${mingguSkrg || "—"}). Semua penyakit dalam batas normal.</p>`; return;
+  }
+
+  // Sort: fix case dulu, lalu peningkatan; masing-masing by jumlah desc
+  alertItems.sort((a, b) => {
+    if (a.tipe !== b.tipe) return a.tipe === "fix" ? -1 : 1;
+    return b.jumlah - a.jumlah;
+  });
+
+  wrap.innerHTML = alertItems.map(item => {
+    if (item.tipe === "fix") {
+      return `<div class="alert-item" style="border-color:#f1aaa0;background:#fff0ee;">
+        <span class="alert-count" style="color:#C4432B;border-color:#C4432B;">${item.jumlah}</span>
+        <div>
+          <span style="font-size:10.5px;font-weight:700;text-transform:uppercase;color:#C4432B;background:#fde8e5;padding:1px 7px;border-radius:100px;margin-bottom:3px;display:inline-block;">⚠ Fix Case [${item.kode}]</span><br>
+          <strong>${item.nama}</strong> <span class="hint">— ${item.jumlah} kasus ≥ min ${item.min} · ${item.minggu}</span>
+        </div>
+      </div>`;
+    } else {
+      const histInfo = item.rataRata !== null
+        ? `rata-rata ${item.rataRata} × ${item.factor} = threshold ${item.threshold}`
+        : `≥ min ${1} kasus (tidak ada data historis)`;
+      return `<div class="alert-item" style="border-color:#f1d090;background:#fffbee;">
+        <span class="alert-count" style="color:#D98E04;border-color:#D98E04;">${item.jumlah}</span>
+        <div>
+          <span style="font-size:10.5px;font-weight:700;text-transform:uppercase;color:#D98E04;background:#fef3c7;padding:1px 7px;border-radius:100px;margin-bottom:3px;display:inline-block;">▲ Peningkatan [${item.kode}]</span><br>
+          <strong>${item.nama}</strong> <span class="hint">— ${item.jumlah} kasus · ${histInfo} · ${item.minggu}</span>
+        </div>
+      </div>`;
+    }
   }).join("");
 }
 
