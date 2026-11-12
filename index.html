@@ -937,6 +937,19 @@
       </div>
     </div>
 
+    <!-- Mapping Nama Desa SIMPUS -->
+    <div class="card" id="cardMappingDesa">
+      <h2>🗺️ Mapping Nama Desa SIMPUS</h2>
+      <p class="sub">Nama desa dari data SIMPUS sering berbeda format dengan daftar desa resmi. Bagian ini menampilkan nama desa yang belum cocok agar bisa dipetakan secara manual.</p>
+      <div id="mappingDesaInfo" style="margin-top:12px;font-size:13px;color:var(--muted);">Belum ada data SIMPUS yang diupload. Upload register di menu SKDR Mingguan → Klasifikasi Register untuk mulai.</div>
+      <div id="mappingDesaTable" style="margin-top:12px;"></div>
+      <div id="mappingDesaActions" style="display:none;margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;">
+        <button class="btn" onclick="mappingSimpan()" style="flex:1;min-width:140px;">💾 Simpan Mapping</button>
+        <button class="btn secondary" onclick="mappingReset()" style="flex:1;min-width:140px;">🗑 Reset Semua Mapping</button>
+      </div>
+      <div id="mappingDesaSaved" style="margin-top:14px;"></div>
+    </div>
+
     <div class="card">
       <h2>Sinkronisasi ke Google Sheets</h2>
       <p class="sub">URL Google Apps Script sudah tertanam otomatis di dalam kode aplikasi (<code>app.js</code>).</p>
@@ -2169,6 +2182,7 @@ function showTab(tab) {
   }
   if (tab === "pengaturan") {
     if (typeof cfgLoadForm === "function") cfgLoadForm();
+    if (typeof mappingRenderUI === "function") mappingRenderUI();
   }
 }
 
@@ -3196,6 +3210,165 @@ function klasAgeGroup(umur){
 // ---- 3. PARSING REGISTER HARIAN ----
 const KLAS_CARA_BAYAR_SET = new Set(["JKN","BAYAR","UMUM","BPJS","GRATIS"]);
 
+// ============================================================
+// NORMALISASI & MAPPING NAMA DESA SIMPUS
+// ============================================================
+const LS_DESA_MAPPING = "waspadane_desa_mapping"; // { "NAMA_SIMPUS": "Nama Resmi" }
+
+function desaMappingLoad() {
+  try { return JSON.parse(localStorage.getItem(LS_DESA_MAPPING) || "{}"); } catch(e) { return {}; }
+}
+function desaMappingSave(map) {
+  try { localStorage.setItem(LS_DESA_MAPPING, JSON.stringify(map)); } catch(e) {}
+}
+
+// Normalisasi otomatis: hapus prefix umum, Title Case
+function desaNormAuto(raw) {
+  if (!raw) return "";
+  let s = raw.trim();
+  // Hapus prefix: DESA, DS., KEL., KELURAHAN, DUSUN, DSN.
+  s = s.replace(/^(DESA|KELURAHAN|KEL\.?|DS\.?|DUSUN|DSN\.?)\s+/i, "");
+  // Hapus suffix yang umum muncul dari SIMPUS
+  s = s.replace(/\s+(RT|RW)\s*\d+.*$/i, "");
+  s = s.trim();
+  // Title Case
+  s = s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  return s;
+}
+
+// Cocokkan ke daftar desa resmi (dari config), return nama resmi atau null
+function desaCocokkan(normalized) {
+  const daftarResmi = DESA_LIST; // dari config setup
+  // 1. Exact match (case insensitive)
+  const exact = daftarResmi.find(d => d.toLowerCase() === normalized.toLowerCase());
+  if (exact) return exact;
+  // 2. Cocok setelah strip prefix dari daftar resmi juga
+  const stripResmi = d => d.replace(/^(Desa|Kelurahan|Kel\.?|Ds\.?)\s+/i, "").trim().toLowerCase();
+  const matchStrip = daftarResmi.find(d => stripResmi(d) === normalized.toLowerCase() || stripResmi(d) === stripResmi(normalized));
+  if (matchStrip) return matchStrip;
+  // 3. Contains match (nama resmi terkandung di normalized atau sebaliknya)
+  const matchContain = daftarResmi.find(d => {
+    const a = stripResmi(d), b = stripResmi(normalized);
+    return a.length > 2 && (a.includes(b) || b.includes(a));
+  });
+  if (matchContain) return matchContain;
+  return null;
+}
+
+// Fungsi utama: normalisasi nama desa dari SIMPUS → nama resmi
+// Urutan: mapping manual → normalisasi otomatis+cocok → auto normalisasi saja
+let _desaUnmapped = {}; // { rawNama: count } — desa yang gagal cocok, untuk ditampilkan
+
+function desaNormalisasi(rawDesa) {
+  const raw = String(rawDesa || "").trim().toUpperCase();
+  if (!raw || ["NULL","NONE","DATA KOSONG","TIDAK DIKETAHUI"].includes(raw)) return "Tidak Diketahui";
+
+  // 1. Cek manual mapping dulu
+  const mapping = desaMappingLoad();
+  if (mapping[raw]) return mapping[raw];
+
+  // 2. Normalisasi otomatis
+  const normalized = desaNormAuto(raw);
+
+  // 3. Cocokkan ke daftar resmi
+  const cocok = desaCocokkan(normalized);
+  if (cocok) return cocok;
+
+  // 4. Tidak cocok — catat untuk mapping manual, kembalikan normalized
+  _desaUnmapped[raw] = (_desaUnmapped[raw] || 0) + 1;
+  return normalized || raw;
+}
+
+// ---- UI MAPPING DESA di Pengaturan ----
+function mappingRenderUI() {
+  const unmapped = _desaUnmapped;
+  const mapping = desaMappingLoad();
+  const tableDiv = document.getElementById("mappingDesaTable");
+  const actDiv = document.getElementById("mappingDesaActions");
+  const infoDiv = document.getElementById("mappingDesaInfo");
+  const savedDiv = document.getElementById("mappingDesaSaved");
+  if (!tableDiv) return;
+
+  // Tampilkan mapping yang sudah tersimpan
+  const savedKeys = Object.keys(mapping);
+  if (savedKeys.length > 0) {
+    savedDiv.innerHTML = `<div style="margin-top:8px;"><strong style="font-size:12px;color:var(--muted);">MAPPING TERSIMPAN (${savedKeys.length})</strong>
+      <table style="width:100%;border-collapse:collapse;margin-top:6px;font-size:12px;">
+        <tr style="background:var(--line);"><th style="padding:5px 8px;text-align:left;">Nama SIMPUS</th><th style="padding:5px 8px;text-align:left;">→ Nama Resmi</th><th style="padding:5px 8px;"></th></tr>
+        ${savedKeys.map(k => `<tr style="border-bottom:1px solid var(--line);">
+          <td style="padding:5px 8px;font-family:monospace;">${k}</td>
+          <td style="padding:5px 8px;color:var(--primary);font-weight:600;">${mapping[k]}</td>
+          <td style="padding:5px 8px;"><a href="#" onclick="mappingHapusSatu('${k.replace(/'/g,"\\'")}');return false;" style="color:#c0392b;font-size:11px;">Hapus</a></td>
+        </tr>`).join("")}
+      </table></div>`;
+  } else {
+    savedDiv.innerHTML = "";
+  }
+
+  const unmappedKeys = Object.keys(unmapped);
+  if (unmappedKeys.length === 0) {
+    infoDiv.style.display = "";
+    infoDiv.textContent = savedKeys.length > 0
+      ? "Semua nama desa dari SIMPUS sudah berhasil dinormalisasi otomatis atau sudah dipetakan."
+      : "Belum ada data SIMPUS yang diupload. Upload register di menu SKDR Mingguan → Klasifikasi Register.";
+    tableDiv.innerHTML = "";
+    if (actDiv) actDiv.style.display = "none";
+    return;
+  }
+
+  infoDiv.style.display = "";
+  infoDiv.innerHTML = `<span style="color:#C4432B;font-weight:600;">${unmappedKeys.length} nama desa</span> dari SIMPUS belum cocok otomatis dengan daftar desa resmi. Pilih padanannya di bawah:`;
+
+  tableDiv.innerHTML = `<table style="width:100%;border-collapse:collapse;margin-top:10px;font-size:13px;">
+    <tr style="background:var(--line);">
+      <th style="padding:7px 10px;text-align:left;">Nama di SIMPUS</th>
+      <th style="padding:7px 10px;text-align:left;">Jumlah</th>
+      <th style="padding:7px 10px;text-align:left;">Peta ke Desa Resmi</th>
+    </tr>
+    ${unmappedKeys.map(k => `<tr style="border-bottom:1px solid var(--line);">
+      <td style="padding:7px 10px;font-family:monospace;font-size:12px;">${k}</td>
+      <td style="padding:7px 10px;color:var(--muted);">${unmapped[k]}x</td>
+      <td style="padding:7px 10px;">
+        <select id="mapsel_${btoa(k).replace(/=/g,'')}" style="width:100%;padding:5px 8px;border-radius:6px;border:1px solid var(--line);font-size:12px;background:var(--surface);color:var(--text);">
+          <option value="">— Biarkan / Tidak Ada Padanan —</option>
+          ${DESA_LIST.map(d => `<option value="${d}">${d}</option>`).join("")}
+        </select>
+      </td>
+    </tr>`).join("")}
+  </table>`;
+  if (actDiv) actDiv.style.display = "flex";
+}
+
+function mappingSimpan() {
+  const unmapped = _desaUnmapped;
+  const mapping = desaMappingLoad();
+  Object.keys(unmapped).forEach(k => {
+    const id = "mapsel_" + btoa(k).replace(/=/g,'');
+    const sel = document.getElementById(id);
+    if (sel && sel.value) mapping[k] = sel.value;
+  });
+  desaMappingSave(mapping);
+  // Bersihkan _desaUnmapped untuk yang sudah dipetakan
+  Object.keys(mapping).forEach(k => { delete _desaUnmapped[k]; });
+  mappingRenderUI();
+  toast("Mapping desa tersimpan ✓");
+}
+
+function mappingHapusSatu(key) {
+  const mapping = desaMappingLoad();
+  delete mapping[key];
+  desaMappingSave(mapping);
+  mappingRenderUI();
+}
+
+function mappingReset() {
+  if (!confirm("Hapus semua mapping nama desa? Nama desa SIMPUS akan kembali ke hasil normalisasi otomatis.")) return;
+  localStorage.removeItem(LS_DESA_MAPPING);
+  _desaUnmapped = {};
+  mappingRenderUI();
+  toast("Mapping desa direset.");
+}
+
 function klasParseSheetRows(aoa, state){
   const rows = [];
   for(const r of aoa){
@@ -3247,8 +3420,8 @@ function klasParseSheetRows(aoa, state){
     const parts = f.ident.split("/").map(p=>p.trim());
     const nama=parts[0]||"", noRm=parts[1]||"";
     const am = f.alamat.match(/^(.*?)\s*RT\b/);
-    let desa = (am ? am[1].trim() : f.alamat).toUpperCase();
-    if(!desa||["NULL","NONE","DATA KOSONG"].includes(desa)) desa="Tidak Diketahui";
+    const desaRaw = (am ? am[1].trim() : f.alamat);
+    let desa = desaNormalisasi(desaRaw);
     const um = f.umurJk.match(/^(\d{1,3})-(\d{1,2})\s*\/\s*([LP])$/);
     const umur = um ? parseInt(um[1],10) : null;
     const jk = um ? ({L:"Laki-laki",P:"Perempuan"}[um[3]]||"") : "";
@@ -3384,6 +3557,11 @@ function klasHandleFile(file){
       }
       statusEl.textContent=`✓ ${klasData.length} kunjungan berhasil dibaca.`;
       klasRenderResults(klasData);
+      // Perbarui UI mapping desa di Pengaturan jika ada yang tidak cocok
+      if (Object.keys(_desaUnmapped).length > 0) {
+        statusEl.textContent += ` ⚠ ${Object.keys(_desaUnmapped).length} nama desa perlu dipetakan — lihat Pengaturan → Mapping Nama Desa.`;
+      }
+      mappingRenderUI();
     }catch(err){
       statusEl.classList.add('err');
       statusEl.textContent='Gagal membaca file: '+err.message;
@@ -3453,7 +3631,7 @@ function klasKirimKeLaporan(){
       id: "klas-" + Date.now() + "-" + idCounter + "-" + Math.random().toString(36).slice(2,7),
       _synced: false,
       tanggal_lapor: tgl || new Date().toISOString().slice(0,10),
-      unit_pelapor: r.pustu || (state.settings && state.settings.unitDefault) || "",
+      unit_pelapor: (r.pustu && r.poli) ? `${r.pustu} — ${r.poli}` : (r.pustu || (state.settings && state.settings.unitDefault) || ""),
       desa: desaVal,
       nama_pasien: r.nama || "",
       umur: umurVal,
