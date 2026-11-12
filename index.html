@@ -2639,11 +2639,32 @@ function _renderAnalisisGrafik() {
   }
 
   // ---- ANALISIS TEMPAT (per desa) ----
-  const perDesa = {};
-  kasus.forEach(k => perDesa[k.desa] = (perDesa[k.desa] || 0) + 1);
-  const desaLabels = Object.keys(perDesa).sort((a, b) => perDesa[b] - perDesa[a]);
+  // Hanya tampilkan desa dalam wilayah (DESA_LIST dari config), sisanya digabung jadi "Luar Wilayah"
+  const desaWilayahSet = new Set(DESA_LIST.map(d => d.toLowerCase().trim()));
+  const perDesaWilayah = {};
+  // Inisialisasi semua desa wilayah dengan 0 agar selalu tampil
+  DESA_LIST.forEach(d => { perDesaWilayah[d] = 0; });
+  let jumlahLuarWilayah = 0;
+  kasus.forEach(k => {
+    const nm = (k.desa || "").trim();
+    if (!nm || nm === "Tidak Diketahui") { jumlahLuarWilayah++; return; }
+    if (desaWilayahSet.has(nm.toLowerCase())) {
+      // Cocokkan ke nama resmi dari DESA_LIST
+      const resmi = DESA_LIST.find(d => d.toLowerCase() === nm.toLowerCase()) || nm;
+      perDesaWilayah[resmi] = (perDesaWilayah[resmi] || 0) + 1;
+    } else {
+      jumlahLuarWilayah++;
+    }
+  });
+  if (jumlahLuarWilayah > 0) perDesaWilayah["⚠ Luar Wilayah"] = jumlahLuarWilayah;
+  // Sort: desa wilayah by jumlah desc, Luar Wilayah selalu di akhir
+  const desaLabels = Object.keys(perDesaWilayah)
+    .filter(d => d !== "⚠ Luar Wilayah")
+    .sort((a, b) => perDesaWilayah[b] - perDesaWilayah[a]);
+  if (jumlahLuarWilayah > 0) desaLabels.push("⚠ Luar Wilayah");
+  const bgColors = desaLabels.map(d => d === "⚠ Luar Wilayah" ? "#C4432B" : "#1B8A8A");
   drawChart("chartTempat", "bar", desaLabels,
-    [{ label: `Kasus ${label}`, data: desaLabels.map(d => perDesa[d]), backgroundColor: "#1B8A8A" }], "chartTempat");
+    [{ label: `Kasus ${label}`, data: desaLabels.map(d => perDesaWilayah[d]), backgroundColor: bgColors }], "chartTempat");
 
   // ---- ANALISIS WAKTU (per minggu epidemiologi) ----
   const perMinggu = {};
