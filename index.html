@@ -934,6 +934,14 @@
           <button class="btn secondary" onclick="cfgReset()" style="flex:1;min-width:140px;color:#c0392b;border-color:#c0392b;">🔄 Reset Pengaturan Awal</button>
         </div>
         <div id="cfgKoneksiInfo" style="display:none;margin-top:10px;padding:10px 14px;border-radius:8px;font-size:13px;"></div>
+        <div id="cfgLinkPelapor" style="margin-top:14px;padding:12px 14px;background:#f0faf6;border-radius:8px;border:1px solid #b2d8cc;font-size:13px;display:none;">
+          <strong>🔗 Link untuk Unit Jejaring &amp; Masyarakat:</strong><br>
+          <span id="cfgLinkPelaporUrl" style="font-family:monospace;font-size:12px;word-break:break-all;color:#2a6b5a;"></span><br>
+          <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap;">
+            <button class="btn" onclick="cfgCopyLink()" style="padding:5px 14px;font-size:12px;">📋 Salin Link</button>
+            <span style="font-size:11.5px;color:#666;align-self:center;">Bagikan link ini ke petugas — mereka langsung bisa lapor tanpa isi setup</span>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -2913,6 +2921,25 @@ function exportCSV(which) {
 /* ---------------------------- INIT ---------------------------- */
 /* ============================= SETUP WIZARD ============================= */
 function setupInit() {
+  // Cek URL parameter ?puskesmas=NamaPuskesmas
+  // Jika ada → mode pelapor (skip wizard, pakai nama dari URL)
+  const urlParams = new URLSearchParams(window.location.search);
+  const puskesmasFromUrl = urlParams.get("puskesmas");
+
+  if (puskesmasFromUrl) {
+    // Mode pelapor: gunakan config tersimpan jika ada, atau buat config minimal dari URL
+    const cfg = getSetupConfig();
+    if (cfg) {
+      applySetupConfig(cfg);
+    } else {
+      // Buat config sementara dari URL (tidak disimpan ke localStorage)
+      const cfgTemp = { namaPuskesmas: decodeURIComponent(puskesmasFromUrl) };
+      applySetupConfig(cfgTemp);
+    }
+    return; // Jangan tampilkan wizard
+  }
+
+  // Mode admin: cek localStorage seperti biasa
   const cfg = getSetupConfig();
   if (!cfg) {
     document.getElementById("setupOverlay").style.display = "flex";
@@ -3037,6 +3064,30 @@ function cfgLoadForm() {
     const activeUrl = s.sheetUrl || cfg.gasUrl || "";
     cfgGas.value = (activeUrl === DEFAULT_SHEET_URL) ? "" : activeUrl;
   }
+  // Tampilkan link untuk pelapor
+  if (cfg.namaPuskesmas) {
+    const baseUrl = window.location.href.split("?")[0];
+    const linkPelapor = baseUrl + "?puskesmas=" + encodeURIComponent(cfg.namaPuskesmas);
+    const linkDiv = document.getElementById("cfgLinkPelapor");
+    const linkUrl = document.getElementById("cfgLinkPelaporUrl");
+    if (linkDiv) linkDiv.style.display = "block";
+    if (linkUrl) linkUrl.textContent = linkPelapor;
+  }
+}
+
+function cfgCopyLink() {
+  const url = document.getElementById("cfgLinkPelaporUrl");
+  if (!url) return;
+  navigator.clipboard.writeText(url.textContent).then(() => {
+    toast("Link berhasil disalin ✓");
+  }).catch(() => {
+    // Fallback: select text
+    const range = document.createRange();
+    range.selectNode(url);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    toast("Blok teks sudah dipilih — tekan Ctrl+C untuk salin");
+  });
 }
 
 function cfgSimpan() {
