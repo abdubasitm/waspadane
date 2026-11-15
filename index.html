@@ -1228,9 +1228,7 @@ let skdrPending     = [];  // array laporan menunggu sync
 
 // Ambil URL Google Apps Script dari pengaturan atau dari app.js
 function skdrGetSheetUrl() {
-  return localStorage.getItem('skdr_sheet_url') ||
-         (typeof SKDR_SHEET_URL !== 'undefined' ? SKDR_SHEET_URL : 'https://script.google.com/macros/s/AKfycbxWf7EWMXpiejkxzr9XXzi8NTmGyp0DePzPWrdtovLa7fOV6Z1R8YQPvUucWd_dFUrC/exec') ||
-         '';
+  return getActiveSheetUrl();
 }
 
 // ---- localStorage ----
@@ -1276,9 +1274,10 @@ async function skdrFetchFromSheets(tahun, minggu) {
   if (!url) return null;
   try {
     const params = new URLSearchParams({ action:'skdrGet', tahun, minggu });
-    const res = await fetch(url + '?' + params);
+    const res = await fetch(url + '?' + params, { method:'GET', redirect:'follow' });
     const json = await res.json();
-    return json.data || null;
+    if (!json || json.status === 'error') return null;
+    return Array.isArray(json.data) ? json.data : [];   // sheet kosong = [] (bukan gagal)
   } catch(e) { return null; }
 }
 
@@ -1551,6 +1550,17 @@ async function skdrPullFromSheets() {
   const data = await skdrFetchFromSheets(tahun, minggu);
   if (!data) { toast('Gagal mengambil data dari Sheets.', true); return; }
   // Gabungkan: data dari Sheets menimpa localStorage untuk key yang sama
+  // Sheets = sumber kebenaran: buang data lokal minggu ini yang sudah dihapus admin di Sheets
+  const mStr   = String(minggu).padStart(2,'0');
+  const prefix = tahun + '_W' + mStr + '_';
+  const remoteKeys  = new Set(data.filter(r => r.key).map(r => r.key));
+  const pendingKeys = new Set(skdrPending.map(r => r.key));
+  let removed = 0;
+  Object.keys(skdrDb).forEach(k => {
+    if (k.startsWith(prefix) && !remoteKeys.has(k) && !pendingKeys.has(k)) {
+      delete skdrDb[k]; removed++;
+    }
+  });
   let count = 0;
   data.forEach(rec => {
     if (rec.key) {
@@ -1565,7 +1575,30 @@ async function skdrPullFromSheets() {
   skdrSave();
   skdrRenderRekap();
   skdrRenderStatus();
-  toast('✓ ' + count + ' data berhasil disinkronkan dari Google Sheets.');
+  toast('✓ ' + count + ' data disinkronkan dari Google Sheets' + (removed ? ', ' + removed + ' data yang sudah dihapus di Sheets dibersihkan.' : '.'));
+}
+
+// Auto-tarik senyap saat tab Rekapitulasi dibuka / minggu diganti
+async function skdrAutoPull() {
+  if (!skdrGetSheetUrl() || !navigator.onLine) return;
+  const tahun  = document.getElementById('skdr-r-tahun')?.value;
+  const minggu = document.getElementById('skdr-r-minggu')?.value;
+  if (!tahun || !minggu) return;
+  const data = await skdrFetchFromSheets(tahun, minggu);
+  if (!data) return;
+  const prefix = tahun + '_W' + String(minggu).padStart(2,'0') + '_';
+  const remoteKeys  = new Set(data.filter(r => r.key).map(r => r.key));
+  const pendingKeys = new Set(skdrPending.map(r => r.key));
+  let changed = false;
+  Object.keys(skdrDb).forEach(k => {
+    if (k.startsWith(prefix) && !remoteKeys.has(k) && !pendingKeys.has(k)) { delete skdrDb[k]; changed = true; }
+  });
+  data.forEach(rec => {
+    if (!rec.key) return;
+    if (typeof rec.nihil === 'string') rec.nihil = (rec.nihil === 'Ya' || rec.nihil === 'true');
+    if (JSON.stringify(skdrDb[rec.key]) !== JSON.stringify(rec)) { skdrDb[rec.key] = rec; changed = true; }
+  });
+  if (changed) { skdrSave(); skdrRenderRekap(); skdrRenderStatus(); }
 }
 
 /* ------------------------------------------------------------------
@@ -1849,8 +1882,8 @@ function skdrKonfirmKirim(tahun, minggu) {
 function skdrSaveSheetUrl() {
   const url = document.getElementById('skdr-sheet-url-input')?.value?.trim();
   if (!url) { toast('URL tidak boleh kosong.', true); return; }
-  localStorage.setItem('skdr_sheet_url', url);
-  toast('✓ URL Google Sheets SKDR berhasil disimpan!');
+  setActiveSheetUrl(url);
+  toast('✓ URL Google Sheets berhasil disimpan untuk seluruh aplikasi!');
   // Langsung coba flush pending jika ada
   skdrFlushPending();
   skdrUpdateSyncBadge();
@@ -1882,8 +1915,8 @@ function skdrShowSubTab(id) {
     skdrFillW('skdr-minggu', document.getElementById('skdr-tahun')?.value || new Date().getFullYear());
     skdrUpdateTgl();
   }
-  if (id === 'rekap')  skdrRenderRekap();
-  if (id === 'status') skdrRenderStatus();
+  if (id === 'rekap')  { skdrRenderRekap(); skdrAutoPull(); }
+  if (id === 'status') { skdrRenderStatus(); skdrAutoPull(); }
   if (id === 'kirim')  skdrRenderKirim();
   if (id === 'pengaturan') skdrRenderPengaturan();
 }
@@ -1968,9 +2001,9 @@ function skdrInit() {
   });
   document.getElementById('skdr-minggu')?.addEventListener('change', skdrUpdateTgl);
   document.getElementById('skdr-r-tahun')?.addEventListener('change', function() {
-    skdrFillW('skdr-r-minggu', this.value); skdrRenderRekap();
+    skdrFillW('skdr-r-minggu', this.value); skdrRenderRekap(); skdrAutoPull();
   });
-  document.getElementById('skdr-r-minggu')?.addEventListener('change', skdrRenderRekap);
+  document.getElementById('skdr-r-minggu')?.addEventListener('change', () => { skdrRenderRekap(); skdrAutoPull(); });
   document.getElementById('skdr-s-tahun')?.addEventListener('change', function() {
     skdrFillW('skdr-s-minggu', this.value); skdrRenderStatus();
   });
@@ -1995,16 +2028,37 @@ const LS_KEYS = { kasus: "skdr_kasus_v1", bencana: "skdr_bencana_v1", settings: 
 
 function loadArr(key) { try { return JSON.parse(localStorage.getItem(key)) || []; } catch (e) { return []; } }
 function saveArr(key, arr) { localStorage.setItem(key, JSON.stringify(arr)); }
+// URL GAS dicari di SEMUA tempat penyimpanan agar Pengaturan utama, Wizard,
+// dan Pengaturan Sheets SKDR selalu memakai URL yang sama.
+function getActiveSheetUrl() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(LS_KEYS.settings) || "{}"); } catch(e) {}
+  let skdrSet = {};
+  try { skdrSet = JSON.parse(localStorage.getItem("skdr_settings_v1") || "{}"); } catch(e) {}
+  const cfg = getSetupConfig();
+  return (saved.sheetUrl || "").trim()
+      || (cfg && cfg.gasUrl ? String(cfg.gasUrl).trim() : "")
+      || (localStorage.getItem("skdr_sheet_url") || "").trim()
+      || (skdrSet.sheetUrl || "").trim()
+      || (!cfg ? DEFAULT_SHEET_URL : "");
+}
+// Simpan URL ke semua tempat sekaligus
+function setActiveSheetUrl(url) {
+  url = (url || "").trim();
+  let s = {};
+  try { s = JSON.parse(localStorage.getItem(LS_KEYS.settings) || "{}"); } catch(e) {}
+  s.sheetUrl = url;
+  localStorage.setItem(LS_KEYS.settings, JSON.stringify(s));
+  if (url) localStorage.setItem("skdr_sheet_url", url); else localStorage.removeItem("skdr_sheet_url");
+  const cfg = getSetupConfig();
+  if (cfg) { cfg.gasUrl = url; localStorage.setItem("waspadane_setup", JSON.stringify(cfg)); }
+  if (typeof state !== "undefined") state.settings.sheetUrl = url;
+}
 function loadSettings() {
   const saved = JSON.parse(localStorage.getItem(LS_KEYS.settings) || "{}");
   const defaults = { sheetUrl: "", unitDefault: "", desaDefault: "" };
   const merged = Object.assign({}, defaults, saved);
-  // Pakai DEFAULT_SHEET_URL hanya jika ini instalasi asli (belum pernah setup wizard)
-  const cfg = getSetupConfig();
-  if (!saved.sheetUrl && !cfg) {
-    merged.sheetUrl = DEFAULT_SHEET_URL;
-  }
-  // Jika sudah setup tapi belum isi URL GAS → sheetUrl tetap kosong, tidak sync ke mana-mana
+  merged.sheetUrl = getActiveSheetUrl();
   return merged;
 }
 function saveSettings(s) { localStorage.setItem(LS_KEYS.settings, JSON.stringify(s)); }
@@ -2374,16 +2428,15 @@ function submitBencana(ev) {
 
 /* ---------------------------- PENGATURAN ---------------------------- */
 function loadSettingsForm() {
-  const isUsingDefault = state.settings.sheetUrl === DEFAULT_SHEET_URL;
-  document.getElementById("inputSheetUrl").value = isUsingDefault ? "" : (state.settings.sheetUrl || "");
+  document.getElementById("inputSheetUrl").value = getActiveSheetUrl() || "";
   fillSelect("inputUnitDefault", UNIT_PELAPOR_LIST, "(tidak ada default)");
   if (state.settings.unitDefault) document.getElementById("inputUnitDefault").value = state.settings.unitDefault;
 }
 function saveSettingsForm(ev) {
   ev.preventDefault();
-  state.settings.sheetUrl = document.getElementById("inputSheetUrl").value.trim();
   state.settings.unitDefault = document.getElementById("inputUnitDefault").value;
   saveSettings(state.settings);
+  setActiveSheetUrl(document.getElementById("inputSheetUrl").value);
   toast("Pengaturan disimpan.");
   initBasicSelects();
 }
@@ -3040,9 +3093,8 @@ async function setupSimpan() {
 
   if (gasUrl && gasUrl !== DEFAULT_SHEET_URL) {
     _hapusDataLokal();
-    const s = { sheetUrl: gasUrl };
-    localStorage.setItem("skdr_settings_v1", JSON.stringify(s));
   }
+  if (gasUrl) setActiveSheetUrl(gasUrl);
 
   location.reload();
 }
@@ -3116,9 +3168,7 @@ function cfgSimpan() {
 
   const cfg = { namaPuskesmas: nama, kabupaten: kab, desa, unit, gasUrl };
   localStorage.setItem("waspadane_setup", JSON.stringify(cfg));
-  const s = JSON.parse(localStorage.getItem(LS_KEYS.settings)||"{}");
-  s.sheetUrl = urlBaru;
-  localStorage.setItem(LS_KEYS.settings, JSON.stringify(s));
+  setActiveSheetUrl(urlBaru);
 
   showToast(urlBerubah
     ? "✅ Konfigurasi disimpan. Data lama dibersihkan. Memuat ulang…"
