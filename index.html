@@ -2152,6 +2152,14 @@ function jsonpRequest(url, timeoutMs) {
   });
 }
 
+// Samakan nama desa dari Sheets (huruf besar/kecil, awalan "Desa") dengan daftar desa resmi
+function _desaDariSheets(raw) {
+  try {
+    if (typeof desaNormalisasi === "function") return desaNormalisasi(raw);
+  } catch(e) {}
+  return raw || "";
+}
+
 async function fetchRemoteData() {
   const url = state.settings.sheetUrl;
   if (!url || url.includes("TEMPEL_URL_GOOGLE_APPS_SCRIPT")) return { ok: false, reason: "URL Google Apps Script belum diisi" };
@@ -2178,7 +2186,8 @@ async function fetchRemoteData() {
       status_kasus : r.status_kasus  || r.statusKasus || '',
       umur         : r.umur          || '',
       umur_satuan  : r.umur_satuan   || r.umurSatuan  || 'Tahun',
-      desa         : r.desa          || ''
+      desa         : _desaDariSheets(r.desa),
+      desa_asli    : r.desa          || ''
     }));
     const remoteBencana = (data.bencana || []).map(r => Object.assign({}, r, {
       _synced          : true,
@@ -2188,7 +2197,8 @@ async function fetchRemoteData() {
       korban_meninggal : r.korban_meninggal || r.korbanMeninggal || 0,
       korban_luka      : r.korban_luka      || r.korbanLuka || 0,
       korban_mengungsi : r.korban_mengungsi || r.korbanMengungsi || 0,
-      desa             : r.desa             || ''
+      desa             : _desaDariSheets(r.desa),
+      desa_asli        : r.desa             || ''
     }));
     const remoteKasusIds = new Set(remoteKasus.map(r => r.id));
     const remoteBencanaIds = new Set(remoteBencana.map(r => r.id));
@@ -2709,9 +2719,14 @@ function _renderAnalisisGrafik() {
   kasus.forEach(k => {
     const nm = (k.desa || "").trim();
     if (!nm || nm === "Tidak Diketahui") { jumlahLuarWilayah++; return; }
+    let resmi = null;
     if (desaWilayahSet.has(nm.toLowerCase())) {
-      // Cocokkan ke nama resmi dari DESA_LIST
-      const resmi = DESA_LIST.find(d => d.toLowerCase() === nm.toLowerCase()) || nm;
+      resmi = DESA_LIST.find(d => d.toLowerCase() === nm.toLowerCase()) || nm;
+    } else if (typeof desaCocokkan === "function") {
+      // nama dari Sheets bisa tanpa awalan "Desa" / huruf besar semua
+      resmi = desaCocokkan(typeof desaNormAuto === "function" ? desaNormAuto(nm) : nm);
+    }
+    if (resmi) {
       perDesaWilayah[resmi] = (perDesaWilayah[resmi] || 0) + 1;
     } else {
       jumlahLuarWilayah++;
